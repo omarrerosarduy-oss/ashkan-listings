@@ -9,7 +9,8 @@ Même mécanique que la landing acheteur (dépôt ashkan-landing), avec l'annonc
 source `meta-laval` ou `meta-longueuil`, étiquette d'adresse commune avec les demandes
 Centris et REALTOR.ca (`255 rue étienne-lavoie #1604`, `3410 ch. de chambly #205`), `lang-en`
 pour Laval, opportunité OZ - Acheteur nommée d'après l'annonce avec son prix, note, tâche,
-accusé de réception (anglais pour Laval), alerte texto à Ashkan.
+accusé de réception (anglais pour Laval), alerte texto à Ashkan, inscription à la séquence
+de relance « 01. Suivi des Leads Acheteurs et Vendeurs » pour une nouvelle opportunité.
 
 Ajouter une annonce : une entrée dans `ANNONCES` (api/lead.js) et une page dont le script
 envoie `page: '<clé>'`.

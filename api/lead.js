@@ -28,6 +28,7 @@ const ANNONCES = {
   },
 };
 const ALERTE_CONTACT_ID = process.env.ALERTE_CONTACT_ID || 'cUafne3cRWoCokXJPuy0'; // fiche « Ashkan Javid » (son cellulaire)
+const SUIVI_WORKFLOW_ID = process.env.SUIVI_WORKFLOW_ID || '303a6b4e-bcef-4575-991e-196c001521b5'; // 01. Suivi des Leads Acheteurs et Vendeurs
 
 const CHAMPS = {
   langues: 'i6cxW4FYk29RNukmVZQU', // Vouvoiement | Tutoiement | Anglais
@@ -146,7 +147,9 @@ export default async function handler(req, res) {
     const alerte =
       `Nouveau lead (annonce ${annonce.court}) : ${nomAffichable(lead.prenom)} ${nomAffichable(lead.nom)}, ${telephoneLisible(lead.telephone)}. ` +
       `Budget ${lead.budgetMin || '?'} à ${lead.budgetMax || '?'} $, délai ${lead.delai || '?'}, préqualifié ${lead.preapprobation || '?'}. Tâche de rappel créée dans le CRM.`;
-    const [n, t, ack, alr] = await Promise.allSettled([
+    // Seulement pour un lead qui entre à « Nouveau lead » : pas de relance à un dossier déjà en cours.
+    const nouvelleOpp = opportunite.status === 'fulfilled' && /^(créée|nouvelle)/.test(opportunite.value);
+    const [n, t, ack, alr, suivi] = await Promise.allSettled([
       avecReessai(
         () => ghl('POST', `/contacts/${contact.id}/notes`, { body: note }),
         () => dejaEcrit(`/contacts/${contact.id}/notes`, 'notes', ref),
@@ -157,11 +160,13 @@ export default async function handler(req, res) {
       ),
       accuserReception(contact.id, lead),
       alerterAshkan(alerte),
+      nouvelleOpp ? inscrireSuivi(contact.id) : Promise.resolve('non (pas de nouvelle opportunité)'),
     ]);
     journal.etapes.note = statut(n);
     journal.etapes.tache = statut(t);
     journal.etapes.accuse = statut(ack);
     journal.etapes.alerte = statut(alr);
+    journal.etapes.suivi = statut(suivi);
 
     console.log(JSON.stringify(journal));
     return res.status(200).json({ ok: true });
@@ -503,6 +508,14 @@ async function alerterAshkan(resume) {
   if (ALERTE_CONTACT_ID === 'desactive') return 'désactivée (essai)';
   await envoyerSms(ALERTE_CONTACT_ID, resume);
   return 'envoyée';
+}
+
+// Inscrit le lead à la séquence de relance du CRM, comme le faisaient les workflows d'entrée
+// FB-Intake et OZ-Intake (dernière action « Add to Workflow »). Le workflow 02 l'en retire dès
+// qu'il répond, appelle ou change d'étape.
+async function inscrireSuivi(contactId) {
+  await ghl('POST', `/contacts/${contactId}/workflow/${SUIVI_WORKFLOW_ID}`, {});
+  return 'inscrit';
 }
 
 function horodatage() {
