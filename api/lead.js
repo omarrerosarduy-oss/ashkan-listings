@@ -130,12 +130,14 @@ export default async function handler(req, res) {
     journal.nouveau = contact.nouveau;
     if (contact.courrielRefuse) journal.etapes.courriel = 'refusé par GHL, gardé dans la note';
 
-    const [etiquettes, criteres, opportunite] = await Promise.allSettled([
+    const [etiquettes, coordonnees, criteres, opportunite] = await Promise.allSettled([
       contact.nouveau ? Promise.resolve('à la création') : ajouterEtiquettes(contact.id, lead),
+      contact.nouveau ? Promise.resolve('à la création') : completerCoordonnees(contact.fiche, lead),
       contact.nouveau ? Promise.resolve('à la création') : mettreAJourCriteres(contact.id, lead),
       creerOpportunite(contact.id, lead),
     ]);
     journal.etapes.etiquettes = statut(etiquettes);
+    journal.etapes.coordonnees = statut(coordonnees);
     journal.etapes.criteres = statut(criteres);
     journal.etapes.opportunite = statut(opportunite);
 
@@ -317,7 +319,7 @@ async function trouverOuCreerContact(lead) {
     params.delete('email');
     doublon = await ghl('GET', `/contacts/search/duplicate?${params}`);
   }
-  if (doublon.contact && doublon.contact.id) return { id: doublon.contact.id, nouveau: false };
+  if (doublon.contact && doublon.contact.id) return { id: doublon.contact.id, nouveau: false, fiche: doublon.contact };
 
   const fiche = {
     locationId: LOCATION_ID,
@@ -516,6 +518,24 @@ async function alerterAshkan(resume) {
 async function inscrireSuivi(contactId) {
   await ghl('POST', `/contacts/${contactId}/workflow/${SUIVI_WORKFLOW_ID}`, {});
   return 'inscrit';
+}
+
+// Contact déjà connu : on ne remplace jamais ce qui existe, on remplit seulement les champs vides.
+// Sans numéro au dossier, le CRM ne peut pas envoyer l'accusé de réception au lead.
+async function completerCoordonnees(fiche, lead) {
+  const manquants = {};
+  if (!fiche.phone && lead.telephone) manquants.phone = lead.telephone;
+  if (!fiche.email && lead.courriel) manquants.email = lead.courriel;
+  if (!fiche.firstName && lead.prenom) manquants.firstName = lead.prenom;
+  if (!fiche.lastName && lead.nom) manquants.lastName = lead.nom;
+  if (!Object.keys(manquants).length) return 'rien à compléter';
+  try {
+    await ghl('PUT', `/contacts/${fiche.id}`, manquants);
+    return `complété : ${Object.keys(manquants).join(', ')}`;
+  } catch (e) {
+    // Par exemple un numéro déjà utilisé par une autre fiche : on continue sans bloquer le lead.
+    return `non complété (${descriptionErreur(e)})`;
+  }
 }
 
 function horodatage() {
