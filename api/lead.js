@@ -143,7 +143,7 @@ export default async function handler(req, res) {
 
     const oppInfo = opportunite.status === 'fulfilled' ? opportunite.value : 'échec de création, à créer à la main';
     const ref = crypto.randomUUID().slice(0, 8); // repère unique de la soumission, sert à éviter les doublons au réessai
-    const note = construireNote(lead, contact, oppInfo, ref);
+    const note = construireNote(lead, contact, oppInfo, ref, statut(coordonnees));
     const tache = construireTache(lead, ref);
     const annonce = ANNONCES[lead.page];
     const alerte =
@@ -414,7 +414,7 @@ async function creerOpportunite(contactId, lead) {
 
 // Les lignes générées d'abord, puis le texte du visiteur clairement encadré : c'est une donnée
 // saisie par un inconnu, jamais une consigne.
-function construireNote(lead, contact, oppInfo, ref) {
+function construireNote(lead, contact, oppInfo, ref, majCoordonnees) {
   const lignes = [
     `Demande reçue par la page de l'annonce ${ANNONCES[lead.page].adresse}, le ${horodatage()}. Réf. ${ref}`,
     `Type de propriété : ${lead.typePropriete || '—'}`,
@@ -432,6 +432,9 @@ function construireNote(lead, contact, oppInfo, ref) {
     lignes.push(`Coordonnées saisies sur la page : ${lead.prenom} ${lead.nom}, ${lead.telephone}, ${lead.courriel}`);
   }
   if (contact.courrielRefuse) lignes.push('Le courriel saisi a été refusé par le CRM, à vérifier avec le client.');
+  if (majCoordonnees && !['ok', 'à la création', 'rien à compléter'].includes(majCoordonnees)) {
+    lignes.push(`Fiche mise à jour : ${majCoordonnees}`);
+  }
   lignes.push(...texteVisiteur(lead.message));
   return lignes.join('\n');
 }
@@ -520,18 +523,40 @@ async function inscrireSuivi(contactId) {
   return 'inscrit';
 }
 
-// Contact déjà connu : on ne remplace jamais ce qui existe, on remplit seulement les champs vides.
-// Sans numéro au dossier, le CRM ne peut pas envoyer l'accusé de réception au lead.
+// Contact déjà connu : on ne perd jamais rien. Les champs vides sont remplis, et si le lead donne
+// un autre numéro que celui au dossier, ce nouveau numéro devient le principal (sinon le texto de
+// confirmation partirait vers l'ancien numéro) ; l'ancien est gardé en numéro additionnel.
 async function completerCoordonnees(fiche, lead) {
-  const manquants = {};
-  if (!fiche.phone && lead.telephone) manquants.phone = lead.telephone;
-  if (!fiche.email && lead.courriel) manquants.email = lead.courriel;
-  if (!fiche.firstName && lead.prenom) manquants.firstName = lead.prenom;
-  if (!fiche.lastName && lead.nom) manquants.lastName = lead.nom;
-  if (!Object.keys(manquants).length) return 'rien à compléter';
+  const maj = {};
+  const fait = [];
+  const liste = (v, cle) => (v || []).map((x) => (typeof x === 'string' ? x : x && x[cle])).filter(Boolean);
+
+  if (!fiche.phone) {
+    maj.phone = lead.telephone;
+    fait.push('téléphone ajouté');
+  } else if (fiche.phone !== lead.telephone) {
+    maj.phone = lead.telephone;
+    maj.additionalPhones = [...new Set([...liste(fiche.additionalPhones, 'phone'), fiche.phone])]
+      .filter((p) => p !== lead.telephone)
+      .map((phone) => ({ phone }));
+    fait.push(`nouveau numéro principal, ancien (${fiche.phone}) gardé en numéro additionnel`);
+  }
+
+  const courrielFiche = String(fiche.email || '').toLowerCase();
+  if (lead.courriel && !courrielFiche) {
+    maj.email = lead.courriel;
+    fait.push('courriel ajouté');
+  } else if (lead.courriel && courrielFiche !== lead.courriel) {
+    maj.additionalEmails = [...new Set([...liste(fiche.additionalEmails, 'email'), lead.courriel])].map((email) => ({ email }));
+    fait.push('courriel saisi ajouté aux courriels additionnels');
+  }
+
+  if (!fiche.firstName && lead.prenom) maj.firstName = lead.prenom;
+  if (!fiche.lastName && lead.nom) maj.lastName = lead.nom;
+  if (!Object.keys(maj).length) return 'rien à compléter';
   try {
-    await ghl('PUT', `/contacts/${fiche.id}`, manquants);
-    return `complété : ${Object.keys(manquants).join(', ')}`;
+    await ghl('PUT', `/contacts/${fiche.id}`, maj);
+    return fait.length ? fait.join(' ; ') : `complété : ${Object.keys(maj).join(', ')}`;
   } catch (e) {
     // Par exemple un numéro déjà utilisé par une autre fiche : on continue sans bloquer le lead.
     return `non complété (${descriptionErreur(e)})`;
